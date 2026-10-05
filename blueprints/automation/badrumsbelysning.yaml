@@ -20,7 +20,8 @@ blueprint:
 
 
     Dörrsensorn är valfri. Utan den styrs lampan bara av rörelse och släcks efter
-    fördröjningen för öppen dörr; närvarologiken och fuktsensorn används då inte.
+    fördröjningen för öppen dörr. Med fuktsensor används en längre fördröjning så
+    länge fukten är hög (dusch).
 
 
     Med dörrsensor krävs en hjälpare av typen Växel (input_boolean) som minne för
@@ -58,8 +59,8 @@ blueprint:
         door_sensor:
           name: Dörrsensor (valfritt)
           description: >-
-            'on' = öppen, 'off' = stängd. Utan dörrsensor styrs lampan bara av
-            rörelse.
+            'on' = öppen, 'off' = stängd. Utan dörrsensor styrs lampan av
+            rörelse, med längre släckfördröjning vid hög fukt om fuktsensor finns.
           # [] och inte "": en tom lista är giltig i state-triggers, en tom sträng inte.
           default: []
           selector:
@@ -89,8 +90,8 @@ blueprint:
         humidity_sensor:
           name: Fuktsensor i badrummet
           description: >-
-            Används för att upptäcka att en dusch startar bakom stängd dörr.
-            Kräver dörrsensor.
+            Med dörrsensor: upptäcker att en dusch startar bakom stängd dörr.
+            Utan dörrsensor: ger en längre släckfördröjning medan fukten är hög.
           default: ""
           selector:
             entity:
@@ -126,6 +127,18 @@ blueprint:
               min: 30
               max: 100
               unit_of_measurement: "%"
+        timeout_humid:
+          name: Släckfördröjning vid hög fukt (utan dörrsensor)
+          description: >-
+            Används i stället för fördröjningen för öppen dörr när ingen dörrsensor
+            finns och fukten är hög, så att lampan inte släcks när rörelsesensorn
+            inte ser någon i duschen.
+          default: 15
+          selector:
+            number:
+              min: 1
+              max: 60
+              unit_of_measurement: min
 
     light_section:
       name: Ljus
@@ -261,6 +274,11 @@ variables:
   t_fallback: !input timeout_fallback
   t_max: !input timeout_max
   t_stuck: !input timeout_motion_stuck
+  t_humid: !input timeout_humid
+  humidity: !input humidity_sensor
+  humidity_ref: !input reference_humidity_sensor
+  humidity_offset_pct: !input humidity_offset
+  humidity_limit: !input humidity_threshold
   dead_states: ["unavailable", "unknown"]
   # Rörelse inom så här många sekunder efter att dörren stängts ignoreras,
   # eftersom sensorn kan reagera på själva dörrbladet.
@@ -278,6 +296,15 @@ variables:
   door_open: "{{ has_door and is_state(door, 'on') }}"
   door_closed: "{{ has_door and is_state(door, 'off') }}"
   occupied: "{{ has_occupancy and is_state(occupancy, 'on') }}"
+
+  # Samma regel som triggern shower_start.
+  humidity_high: >-
+    {%- set h = states(humidity) | float(none) if humidity else none -%}
+    {%- set r = states(humidity_ref) | float(none) if humidity_ref else none -%}
+    {%- if h is none -%}{{ false }}
+    {%- elif r is not none -%}{{ h >= r + humidity_offset_pct | float(0) }}
+    {%- else -%}{{ h >= humidity_limit | float(0) }}
+    {%- endif -%}
 
   # Sekunder sedan dörren senast bytte tillstånd.
   door_age_s: >-
@@ -320,6 +347,7 @@ variables:
     {%- elif motion_dead -%}{{ idle >= t_fallback | float(0) }}
     {%- elif m_idle >= t_max | float(0) -%}{{ true }}
     {%- elif door_dead -%}{{ idle >= t_fallback | float(0) }}
+    {%- elif not has_door and humidity_high -%}{{ idle >= t_humid | float(0) }}
     {%- elif door_open or not has_door -%}{{ idle >= t_open | float(0) }}
     {%- elif occupied -%}{{ false }}
     {%- else -%}{{ idle >= t_empty | float(0) }}
@@ -385,6 +413,12 @@ triggers:
     to: "off"
     for:
       minutes: !input timeout_max
+    id: evaluate
+  - trigger: state
+    entity_id: !input motion_sensor
+    to: "off"
+    for:
+      minutes: !input timeout_humid
     id: evaluate
   - trigger: state
     entity_id: !input door_sensor
