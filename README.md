@@ -54,8 +54,13 @@ separate day and night brightness and keeps track of whether someone is still
 inside using *wasp in a box* logic: if the door is closed and motion has been
 seen after it closed, someone is in there.
 
+The door sensor is optional. Without one, the light is controlled by motion
+only and turns off after the open-door delay; the occupancy logic and the
+humidity sensor are not used.
+
 | Situation | Behaviour |
 | --- | --- |
+| No door sensor | Turns off after a short delay without motion. |
 | Door open | Turns off after a short delay without activity. |
 | Door closed, nobody inside | Turns off after a short delay. |
 | Door closed, someone inside | Stays on until the door opens. |
@@ -72,13 +77,13 @@ turned on manually.
 
 - One or more lights (or a light group).
 - A motion, occupancy or presence `binary_sensor`.
-- A door or opening `binary_sensor` (`on` = open, `off` = closed).
-- A **Toggle** helper (`input_boolean`) used only by this automation. It
-  remembers whether someone is inside behind the closed door, even across
-  restarts. Create it under **Settings → Devices & services → Helpers →
-  Create helper → Toggle**.
-- Optional: a humidity sensor in the bathroom, and preferably a reference
-  humidity sensor in another room.
+- Optional: a door or opening `binary_sensor` (`on` = open, `off` = closed).
+- With a door sensor: a **Toggle** helper (`input_boolean`) used only by this
+  automation. It remembers whether someone is inside behind the closed door,
+  even across restarts. Create it under **Settings → Devices & services →
+  Helpers → Create helper → Toggle**.
+- Optional, with a door sensor: a humidity sensor in the bathroom, and
+  preferably a reference humidity sensor in another room.
 
 #### Inputs
 
@@ -88,14 +93,14 @@ turned on manually.
 | --- | --- | --- |
 | Badrumslampa | The light(s) to control. | – |
 | Rörelsesensor | Motion / occupancy / presence sensor. | – |
-| Dörrsensor | Door / opening sensor. | – |
-| Närvarohjälpare | The `input_boolean` helper that stores occupancy. | – |
+| Dörrsensor (valfritt) | Door / opening sensor. Without one, the light is controlled by motion only. | – |
+| Närvarohjälpare | The `input_boolean` helper that stores occupancy. Required with a door sensor, unused without one. | – |
 
 **Fukt (Humidity, optional)**
 
 | Input | Description | Default |
 | --- | --- | --- |
-| Fuktsensor i badrummet | Detects a shower starting behind a closed door. | – |
+| Fuktsensor i badrummet | Detects a shower starting behind a closed door. Requires a door sensor. | – |
 | Referensfuktsensor | Humidity sensor in another room. Recommended: the shower is then detected relative to the rest of the home instead of a fixed limit, so it works equally well in summer and winter. | – |
 | Fuktökning som räknas som dusch | Percentage points above the reference sensor that count as a shower. Only used with a reference sensor. | 10 % |
 | Fast fuktgräns | Fixed humidity limit. Only used without a reference sensor (or if it is unavailable). | 70 % |
@@ -114,9 +119,9 @@ turned on manually.
 
 | Input | Description | Default |
 | --- | --- | --- |
-| Släckfördröjning (Öppen dörr) | Turn-off delay with the door open. | 3 min |
-| Släckfördröjning (Stängd dörr, ingen där inne) | Turn-off delay with the door closed and nobody inside, e.g. after someone left and closed the door behind them. A longer value protects someone who goes in, closes the door and sits completely still. | 5 min |
-| Rörelsesensorns återställningstid | How long the motion sensor stays `on` after the last motion, plus margin. Must be **longer** than the sensor's own reset time (e.g. Aqara ≈ 60 s, IKEA up to 180 s), otherwise someone who leaves and closes the door is treated as still inside. | 90 s |
+| Släckfördröjning (Öppen dörr eller ingen dörrsensor) | Turn-off delay with the door open, or always when there is no door sensor. | 3 min |
+| Släckfördröjning (Stängd dörr, ingen där inne) | Turn-off delay with the door closed and nobody inside, e.g. after someone left and closed the door behind them. A longer value protects someone who goes in, closes the door and sits completely still. Door sensor only. | 5 min |
+| Rörelsesensorns återställningstid | How long the motion sensor stays `on` after the last motion, plus margin. Must be **longer** than the sensor's own reset time (e.g. Aqara ≈ 60 s, IKEA up to 180 s), otherwise someone who leaves and closes the door is treated as still inside. Door sensor only. | 90 s |
 | Reservfördröjning (Död sensor) | Turn-off delay when the door or motion sensor is unavailable. | 10 min |
 | Absolut maxtid utan rörelse | Always turns off after this long without motion, even if someone is believed to be inside. | 90 min |
 | Max tid med rörelse på | If the motion sensor stays `on` this long continuously it is treated as stuck and the light turns off. Useful for PIR sensors; leave at 0 (off) for mmWave / presence sensors, which can legitimately stay `on` for a long time. | 0 (off) |

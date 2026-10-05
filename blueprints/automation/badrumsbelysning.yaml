@@ -19,8 +19,13 @@ blueprint:
     - Absolut maxtid utan rörelse: släcker alltid till slut.
 
 
-    Kräver en hjälpare av typen Växel (input_boolean) som minne för närvaron. Skapa
-    den under Inställningar → Enheter och tjänster → Hjälpare → Skapa hjälpare → Växel.
+    Dörrsensorn är valfri. Utan den styrs lampan bara av rörelse och släcks efter
+    fördröjningen för öppen dörr; närvarologiken och fuktsensorn används då inte.
+
+
+    Med dörrsensor krävs en hjälpare av typen Växel (input_boolean) som minne för
+    närvaron. Skapa den under Inställningar → Enheter och tjänster → Hjälpare →
+    Skapa hjälpare → Växel.
   domain: automation
   author: h3rman
   source_url: https://github.com/h3rman/ha-blueprints/blob/main/blueprints/automation/badrumsbelysning.yaml
@@ -51,8 +56,12 @@ blueprint:
                 - domain: binary_sensor
                   device_class: presence
         door_sensor:
-          name: Dörrsensor
-          description: "'on' = öppen, 'off' = stängd."
+          name: Dörrsensor (valfritt)
+          description: >-
+            'on' = öppen, 'off' = stängd. Utan dörrsensor styrs lampan bara av
+            rörelse.
+          # [] och inte "": en tom lista är giltig i state-triggers, en tom sträng inte.
+          default: []
           selector:
             entity:
               filter:
@@ -63,9 +72,10 @@ blueprint:
         occupancy_helper:
           name: Närvarohjälpare
           description: >-
-            En Växel-hjälpare (input_boolean) som bara används av den här
-            automationen. Den minns om någon är kvar bakom stängd dörr, även
-            över omstarter.
+            Krävs om du använder dörrsensor. En Växel-hjälpare (input_boolean)
+            som bara används av den här automationen. Den minns om någon är kvar
+            bakom stängd dörr, även över omstarter.
+          default: ""
           selector:
             entity:
               filter:
@@ -78,7 +88,9 @@ blueprint:
       input:
         humidity_sensor:
           name: Fuktsensor i badrummet
-          description: Används för att upptäcka att en dusch startar bakom stängd dörr.
+          description: >-
+            Används för att upptäcka att en dusch startar bakom stängd dörr.
+            Kräver dörrsensor.
           default: ""
           selector:
             entity:
@@ -161,7 +173,7 @@ blueprint:
       collapsed: true
       input:
         timeout_open_door:
-          name: Släckfördröjning (Öppen dörr)
+          name: Släckfördröjning (Öppen dörr eller ingen dörrsensor)
           default: 3
           selector:
             number:
@@ -172,7 +184,8 @@ blueprint:
           name: Släckfördröjning (Stängd dörr, ingen där inne)
           description: >-
             Gäller t.ex. när någon gått ut och stängt dörren efter sig. Ett längre
-            värde skyddar den som går in, stänger och sitter helt still.
+            värde skyddar den som går in, stänger och sitter helt still. Används
+            bara med dörrsensor.
           default: 5
           selector:
             number:
@@ -185,7 +198,8 @@ blueprint:
             Hur länge rörelsesensorn ligger kvar på 'on' efter senaste rörelse,
             plus marginal. Måste vara LÄNGRE än sensorns egen återställningstid,
             annars tolkas den som går ut och stänger dörren som att den är kvar
-            (t.ex. Aqara ca 60 s, IKEA upp till 180 s).
+            (t.ex. Aqara ca 60 s, IKEA upp till 180 s). Används bara med
+            dörrsensor.
           default: 90
           selector:
             number:
@@ -255,11 +269,15 @@ variables:
   lights_list: "{{ [light_entities] if light_entities is string else light_entities | list }}"
   any_light_on: "{{ lights_list | select('is_state', 'on') | list | count > 0 }}"
 
+  # Dörrsensor och närvarohjälpare är valfria. Utan dörr finns ingen närvarologik.
+  has_door: "{{ door is string and door != '' }}"
+  has_occupancy: "{{ has_door and occupancy is string and occupancy != '' }}"
+
   motion_dead: "{{ states(motion) in dead_states }}"
-  door_dead: "{{ states(door) in dead_states }}"
-  door_open: "{{ is_state(door, 'on') }}"
-  door_closed: "{{ is_state(door, 'off') }}"
-  occupied: "{{ is_state(occupancy, 'on') }}"
+  door_dead: "{{ has_door and states(door) in dead_states }}"
+  door_open: "{{ has_door and is_state(door, 'on') }}"
+  door_closed: "{{ has_door and is_state(door, 'off') }}"
+  occupied: "{{ has_occupancy and is_state(occupancy, 'on') }}"
 
   # Sekunder sedan dörren senast bytte tillstånd.
   door_age_s: >-
@@ -279,7 +297,7 @@ variables:
 
   # Minuter sedan senaste aktivitet: rörelse, dörr eller lampa bytte tillstånd.
   idle_min: >-
-    {%- set times = expand([motion, door] + lights_list)
+    {%- set times = expand([motion] + ([door] if has_door else []) + lights_list)
                     | map(attribute='last_changed') | list -%}
     {{- (now() - (times | max)).total_seconds() / 60 if times else 0 -}}
 
@@ -302,7 +320,7 @@ variables:
     {%- elif motion_dead -%}{{ idle >= t_fallback | float(0) }}
     {%- elif m_idle >= t_max | float(0) -%}{{ true }}
     {%- elif door_dead -%}{{ idle >= t_fallback | float(0) }}
-    {%- elif door_open -%}{{ idle >= t_open | float(0) }}
+    {%- elif door_open or not has_door -%}{{ idle >= t_open | float(0) }}
     {%- elif occupied -%}{{ false }}
     {%- else -%}{{ idle >= t_empty | float(0) }}
     {%- endif -%}
@@ -387,50 +405,54 @@ triggers:
     id: evaluate
 
 actions:
-  # 1. Uppdatera närvaro (wasp in a box)
-  - choose:
-      # Dörren öppnas: ingen är längre instängd.
-      - conditions:
-          - condition: trigger
-            id: door_opened
-        sequence:
-          - action: input_boolean.turn_off
-            target:
-              entity_id: "{{ occupancy }}"
+  # 1. Uppdatera närvaro (wasp in a box). Bara med dörrsensor och närvarohjälpare.
+  - if:
+      - condition: template
+        value_template: "{{ has_occupancy }}"
+    then:
+      - choose:
+          # Dörren öppnas: ingen är längre instängd.
+          - conditions:
+              - condition: trigger
+                id: door_opened
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: "{{ occupancy }}"
 
-      # Ny rörelse bakom stängd dörr: någon är där inne.
-      - conditions:
-          - condition: trigger
-            id: motion_on
-          - condition: template
-            value_template: "{{ door_closed and door_age_s | float(0) > door_ignore_s }}"
-        sequence:
-          - action: input_boolean.turn_on
-            target:
-              entity_id: "{{ occupancy }}"
+          # Ny rörelse bakom stängd dörr: någon är där inne.
+          - conditions:
+              - condition: trigger
+                id: motion_on
+              - condition: template
+                value_template: "{{ door_closed and door_age_s | float(0) > door_ignore_s }}"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: "{{ occupancy }}"
 
-      # Rörelse pågår fortfarande efter återställningstiden: någon stängde
-      # dörren inifrån och rör sig.
-      - conditions:
-          - condition: trigger
-            id: door_settled
-          - condition: template
-            value_template: "{{ is_state(motion, 'on') }}"
-        sequence:
-          - action: input_boolean.turn_on
-            target:
-              entity_id: "{{ occupancy }}"
+          # Rörelse pågår fortfarande efter återställningstiden: någon stängde
+          # dörren inifrån och rör sig.
+          - conditions:
+              - condition: trigger
+                id: door_settled
+              - condition: template
+                value_template: "{{ is_state(motion, 'on') }}"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: "{{ occupancy }}"
 
-      # Duschen startar bakom stängd dörr medan lampan är tänd.
-      - conditions:
-          - condition: trigger
-            id: shower_start
-          - condition: template
-            value_template: "{{ door_closed and any_light_on }}"
-        sequence:
-          - action: input_boolean.turn_on
-            target:
-              entity_id: "{{ occupancy }}"
+          # Duschen startar bakom stängd dörr medan lampan är tänd.
+          - conditions:
+              - condition: trigger
+                id: shower_start
+              - condition: template
+                value_template: "{{ door_closed and any_light_on }}"
+            sequence:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: "{{ occupancy }}"
 
   # 2. Tänd vid rörelse eller öppnad dörr
   - if:
