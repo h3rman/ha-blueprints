@@ -54,10 +54,11 @@ separate day and night brightness and keeps track of whether someone is still
 inside using *wasp in a box* logic: if the door is closed and motion has been
 seen after it closed, someone is in there.
 
-The door sensor is optional. Without one, the light is controlled by motion
-and turns off after the open-door delay. If a humidity sensor is configured, a
-longer delay is used while the humidity is high, so the light stays on while
-someone showers out of the motion sensor's view.
+No helper is needed: occupancy is worked out from when the door and motion
+sensor last changed. The door sensor is optional too. Without one, the light is
+controlled by motion and turns off after the open-door delay. If a humidity
+sensor is configured, a longer delay is used while the humidity is high, so the
+light stays on while someone showers out of the motion sensor's view.
 
 | Situation | Behaviour |
 | --- | --- |
@@ -65,7 +66,7 @@ someone showers out of the motion sensor's view.
 | Door open | Turns off after a short delay without activity. |
 | Door closed, nobody inside | Turns off after a short delay. |
 | Door closed, someone inside | Stays on until the door opens. |
-| Shower starts behind a closed door (humidity rises) | Counts as someone being inside. |
+| High humidity (shower) | Longer turn-off delay. With the optional helper: a shower starting behind a closed door counts as someone being inside. |
 | Door or motion sensor unavailable | Turns off after a fallback delay. |
 | No motion for a very long time | Always turns off eventually (absolute max time). |
 
@@ -79,12 +80,25 @@ turned on manually.
 - One or more lights (or a light group).
 - A motion, occupancy or presence `binary_sensor`.
 - Optional: a door or opening `binary_sensor` (`on` = open, `off` = closed).
-- With a door sensor: a **Toggle** helper (`input_boolean`) used only by this
-  automation. It remembers whether someone is inside behind the closed door,
-  even across restarts. Create it under **Settings → Devices & services →
-  Helpers → Create helper → Toggle**.
 - Optional: a humidity sensor in the bathroom, and preferably a reference
   humidity sensor in another room.
+- Optional, with a door sensor: a **Toggle** helper (`input_boolean`) used only
+  by this automation (see below). Create it under **Settings → Devices &
+  services → Helpers → Create helper → Toggle**.
+
+#### With or without the helper
+
+Without the helper, occupancy is calculated from timestamps: someone is inside
+if the door is closed and motion started after it closed, or was still going
+on after the motion sensor's reset time. This needs no setup, but it has
+limits that the helper avoids:
+
+- The timestamps reset when Home Assistant restarts or the door or motion
+  sensor briefly drops out, so someone sitting still is forgotten; the light
+  then turns off after the closed-door delay until they move again.
+- A shower is handled with the longer high-humidity delay instead. With the
+  helper, a shower that starts behind a closed door counts as someone being
+  inside until the door opens.
 
 #### Inputs
 
@@ -95,17 +109,17 @@ turned on manually.
 | Badrumslampa | The light(s) to control. | – |
 | Rörelsesensor | Motion / occupancy / presence sensor. | – |
 | Dörrsensor (valfritt) | Door / opening sensor. Without one, the light is controlled by motion, with a longer delay while the humidity is high if a humidity sensor is set. | – |
-| Närvarohjälpare | The `input_boolean` helper that stores occupancy. Required with a door sensor, unused without one. | – |
+| Närvarohjälpare | Optional `input_boolean` helper that stores occupancy, making it survive restarts and sensor dropouts. Only used with a door sensor. | – |
 
 **Fukt (Humidity, optional)**
 
 | Input | Description | Default |
 | --- | --- | --- |
-| Fuktsensor i badrummet | With a door sensor: detects a shower starting behind a closed door. Without one: gives a longer turn-off delay while the humidity is high. | – |
+| Fuktsensor i badrummet | Gives a longer turn-off delay while the humidity is high. With the helper, a shower starting behind a closed door instead counts as someone being inside. | – |
 | Referensfuktsensor | Humidity sensor in another room. Recommended: the shower is then detected relative to the rest of the home instead of a fixed limit, so it works equally well in summer and winter. | – |
 | Fuktökning som räknas som dusch | Percentage points above the reference sensor that count as a shower. Only used with a reference sensor. | 10 % |
 | Fast fuktgräns | Fixed humidity limit. Only used without a reference sensor (or if it is unavailable). | 70 % |
-| Släckfördröjning vid hög fukt (utan dörrsensor) | Used instead of the open-door delay when there is no door sensor and the humidity is high. | 15 min |
+| Släckfördröjning vid hög fukt | Used instead of the normal turn-off delay (if longer) while the humidity is high. Not used with the helper. | 15 min |
 
 **Ljus (Light)**
 

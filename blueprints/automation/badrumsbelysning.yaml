@@ -12,21 +12,21 @@ blueprint:
 
     - Stängd dörr, någon där inne: låt lampan vara tänd tills dörren öppnas.
 
-    - Dusch startar bakom stängd dörr (fukten stiger): räknas som att någon är där inne.
+    - Hög fukt (dusch): längre släckfördröjning, så att lampan inte släcks när
+    rörelsesensorn inte ser någon i duschen.
 
     - Död dörr- eller rörelsesensor: släck efter reservfördröjning.
 
     - Absolut maxtid utan rörelse: släcker alltid till slut.
 
 
-    Dörrsensorn är valfri. Utan den styrs lampan bara av rörelse och släcks efter
-    fördröjningen för öppen dörr. Med fuktsensor används en längre fördröjning så
-    länge fukten är hög (dusch).
+    Dörrsensorn är valfri. Utan den styrs lampan bara av rörelse (och fukt) och
+    släcks efter fördröjningen för öppen dörr.
 
 
-    Med dörrsensor krävs en hjälpare av typen Växel (input_boolean) som minne för
-    närvaron. Skapa den under Inställningar → Enheter och tjänster → Hjälpare →
-    Skapa hjälpare → Växel.
+    Ingen hjälpare behövs: närvaron räknas fram ur när dörren och rörelsesensorn
+    senast ändrades. En valfri Växel-hjälpare (input_boolean) gör närvaron
+    robustare, se Närvarohjälpare.
   domain: automation
   author: h3rman
   source_url: https://github.com/h3rman/ha-blueprints/blob/main/blueprints/automation/badrumsbelysning.yaml
@@ -73,9 +73,12 @@ blueprint:
         occupancy_helper:
           name: Närvarohjälpare
           description: >-
-            Krävs om du använder dörrsensor. En Växel-hjälpare (input_boolean)
-            som bara används av den här automationen. Den minns om någon är kvar
-            bakom stängd dörr, även över omstarter.
+            Valfri, används bara med dörrsensor. En Växel-hjälpare (input_boolean)
+            som bara används av den här automationen och minns om någon är kvar
+            bakom stängd dörr. Utan den räknas närvaron fram ur sensorernas
+            tidsstämplar, vilket glöms bort vid omstart eller om dörr- eller
+            rörelsesensorn tappar anslutningen. Med den räknas också en dusch som
+            startar bakom stängd dörr som att någon är där inne.
           default: ""
           selector:
             entity:
@@ -90,8 +93,9 @@ blueprint:
         humidity_sensor:
           name: Fuktsensor i badrummet
           description: >-
-            Med dörrsensor: upptäcker att en dusch startar bakom stängd dörr.
-            Utan dörrsensor: ger en längre släckfördröjning medan fukten är hög.
+            Ger en längre släckfördröjning medan fukten är hög. Med
+            närvarohjälpare räknas i stället en dusch som startar bakom stängd
+            dörr som att någon är där inne.
           default: ""
           selector:
             entity:
@@ -128,11 +132,10 @@ blueprint:
               max: 100
               unit_of_measurement: "%"
         timeout_humid:
-          name: Släckfördröjning vid hög fukt (utan dörrsensor)
+          name: Släckfördröjning vid hög fukt
           description: >-
-            Används i stället för fördröjningen för öppen dörr när ingen dörrsensor
-            finns och fukten är hög, så att lampan inte släcks när rörelsesensorn
-            inte ser någon i duschen.
+            Används i stället för den vanliga släckfördröjningen (om den är
+            längre) så länge fukten är hög. Gäller inte med närvarohjälpare.
           default: 15
           selector:
             number:
@@ -275,6 +278,7 @@ variables:
   t_max: !input timeout_max
   t_stuck: !input timeout_motion_stuck
   t_humid: !input timeout_humid
+  grace_s: !input door_grace
   humidity: !input humidity_sensor
   humidity_ref: !input reference_humidity_sensor
   humidity_offset_pct: !input humidity_offset
@@ -289,13 +293,12 @@ variables:
 
   # Dörrsensor och närvarohjälpare är valfria. Utan dörr finns ingen närvarologik.
   has_door: "{{ door is string and door != '' }}"
-  has_occupancy: "{{ has_door and occupancy is string and occupancy != '' }}"
+  use_helper: "{{ has_door and occupancy is string and occupancy != '' }}"
 
   motion_dead: "{{ states(motion) in dead_states }}"
   door_dead: "{{ has_door and states(door) in dead_states }}"
   door_open: "{{ has_door and is_state(door, 'on') }}"
   door_closed: "{{ has_door and is_state(door, 'off') }}"
-  occupied: "{{ has_occupancy and is_state(occupancy, 'on') }}"
 
   # Samma regel som triggern shower_start.
   humidity_high: >-
@@ -306,10 +309,28 @@ variables:
     {%- else -%}{{ h >= humidity_limit | float(0) }}
     {%- endif -%}
 
-  # Sekunder sedan dörren senast bytte tillstånd.
+  # Sekunder sedan dörren respektive rörelsesensorn senast bytte tillstånd.
   door_age_s: >-
     {%- set d = expand(door) | list -%}
     {{- (now() - d[0].last_changed).total_seconds() if d else 0 -}}
+  motion_age_s: >-
+    {%- set m = expand(motion) | list -%}
+    {{- (now() - m[0].last_changed).total_seconds() if m else 0 -}}
+
+  # Någon är där inne bakom stängd dörr. Med hjälpare: dess tillstånd. Utan:
+  # samma regler räknade ur tidsstämplarna, dvs. rörelse har börjat efter att
+  # dörren stängdes, eller pågick fortfarande efter återställningstiden.
+  occupied: >-
+    {%- if use_helper -%}{{ is_state(occupancy, 'on') }}
+    {%- elif not door_closed -%}{{ false }}
+    {%- else -%}
+      {%- set since_close = door_age_s | float(0) - motion_age_s | float(0) -%}
+      {%- if is_state(motion, 'on') -%}
+        {{ since_close > door_ignore_s or door_age_s | float(0) >= grace_s | float(0) }}
+      {%- else -%}
+        {{ since_close > grace_s | float(0) }}
+      {%- endif -%}
+    {%- endif -%}
 
   # Minuter sedan rörelsesensorn senast bytte tillstånd, uppdelat på
   # om den nu är 'on' (för fastnad sensor) eller inte (för maxtid).
@@ -347,10 +368,13 @@ variables:
     {%- elif motion_dead -%}{{ idle >= t_fallback | float(0) }}
     {%- elif m_idle >= t_max | float(0) -%}{{ true }}
     {%- elif door_dead -%}{{ idle >= t_fallback | float(0) }}
-    {%- elif not has_door and humidity_high -%}{{ idle >= t_humid | float(0) }}
-    {%- elif door_open or not has_door -%}{{ idle >= t_open | float(0) }}
-    {%- elif occupied -%}{{ false }}
-    {%- else -%}{{ idle >= t_empty | float(0) }}
+    {%- elif occupied and not door_open -%}{{ false }}
+    {%- else -%}
+      {%- set delay = (t_open if door_open or not has_door else t_empty) | float(0) -%}
+      {%- if humidity_high and not use_helper -%}
+        {%- set delay = [delay, t_humid | float(0)] | max -%}
+      {%- endif -%}
+      {{ idle >= delay }}
     {%- endif -%}
 
 triggers:
@@ -442,7 +466,7 @@ actions:
   # 1. Uppdatera närvaro (wasp in a box). Bara med dörrsensor och närvarohjälpare.
   - if:
       - condition: template
-        value_template: "{{ has_occupancy }}"
+        value_template: "{{ use_helper }}"
     then:
       - choose:
           # Dörren öppnas: ingen är längre instängd.
