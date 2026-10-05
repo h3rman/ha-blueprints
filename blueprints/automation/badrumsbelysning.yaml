@@ -1,0 +1,472 @@
+blueprint:
+  name: "Badrumsbelysning"
+  description: >-
+    Tänder vid rörelse eller när dörren öppnas, med separat ljusstyrka för dag och natt.
+    Håller reda på om någon är kvar i badrummet med "wasp in a box"-logik: om dörren
+    är stängd och rörelse har setts efter att den stängdes, är någon där inne.
+
+
+    - Öppen dörr: släck efter kort fördröjning utan aktivitet.
+
+    - Stängd dörr, ingen där inne: släck efter kort fördröjning.
+
+    - Stängd dörr, någon där inne: låt lampan vara tänd tills dörren öppnas.
+
+    - Dusch startar bakom stängd dörr (fukten stiger): räknas som att någon är där inne.
+
+    - Död dörr- eller rörelsesensor: släck efter reservfördröjning.
+
+    - Absolut maxtid utan rörelse: släcker alltid till slut.
+
+
+    Kräver en hjälpare av typen Växel (input_boolean) som minne för närvaron. Skapa
+    den under Inställningar → Enheter och tjänster → Hjälpare → Skapa hjälpare → Växel.
+  domain: automation
+  author: h3rman
+  source_url: https://github.com/h3rman/ha-blueprints/blob/main/blueprints/automation/badrumsbelysning.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+  input:
+    devices_section:
+      name: Enheter
+      icon: mdi:devices
+      input:
+        target_light:
+          name: Badrumslampa
+          description: En eller flera lampor (eller en ljusgrupp).
+          selector:
+            entity:
+              filter:
+                - domain: light
+              multiple: true
+        motion_sensor:
+          name: Rörelsesensor
+          selector:
+            entity:
+              filter:
+                - domain: binary_sensor
+                  device_class: motion
+                - domain: binary_sensor
+                  device_class: occupancy
+                - domain: binary_sensor
+                  device_class: presence
+        door_sensor:
+          name: Dörrsensor
+          description: "'on' = öppen, 'off' = stängd."
+          selector:
+            entity:
+              filter:
+                - domain: binary_sensor
+                  device_class: door
+                - domain: binary_sensor
+                  device_class: opening
+        occupancy_helper:
+          name: Närvarohjälpare
+          description: >-
+            En Växel-hjälpare (input_boolean) som bara används av den här
+            automationen. Den minns om någon är kvar bakom stängd dörr, även
+            över omstarter.
+          selector:
+            entity:
+              filter:
+                - domain: input_boolean
+
+    humidity_section:
+      name: Fukt (valfritt)
+      icon: mdi:water-percent
+      collapsed: true
+      input:
+        humidity_sensor:
+          name: Fuktsensor i badrummet
+          description: Används för att upptäcka att en dusch startar bakom stängd dörr.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: humidity
+        reference_humidity_sensor:
+          name: Referensfuktsensor (annat rum)
+          description: >-
+            Rekommenderas. Duschen upptäcks då relativt övriga bostaden i stället
+            för mot en fast gräns, så det fungerar lika bra sommar som vinter.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: humidity
+        humidity_offset:
+          name: Fuktökning som räknas som dusch
+          description: Procentenheter över referenssensorn. Används bara med referenssensor.
+          default: 10
+          selector:
+            number:
+              min: 3
+              max: 40
+              unit_of_measurement: "%"
+        humidity_threshold:
+          name: Fast fuktgräns
+          description: Används bara om ingen referenssensor finns (eller om den är död).
+          default: 70
+          selector:
+            number:
+              min: 30
+              max: 100
+              unit_of_measurement: "%"
+
+    light_section:
+      name: Ljus
+      icon: mdi:lightbulb-on-outline
+      input:
+        time_night_start:
+          name: Nattläge startar
+          default: "23:00:00"
+          selector:
+            time: {}
+        time_night_end:
+          name: Nattläge slutar
+          default: "06:00:00"
+          selector:
+            time: {}
+        day_brightness:
+          name: Ljusstyrka (Dag)
+          default: 100
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
+        night_brightness:
+          name: Ljusstyrka (Natt)
+          default: 10
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
+        keep_manual_brightness:
+          name: Behåll manuell ljusstyrka
+          description: >-
+            Om på: ändra inte ljusstyrkan vid rörelse när lampan redan är tänd.
+            Vid bytet mellan dag- och nattläge sätts ljusstyrkan alltid om på
+            tända lampor.
+          default: false
+          selector:
+            boolean: {}
+
+    timing_section:
+      name: Tider
+      icon: mdi:timer-outline
+      collapsed: true
+      input:
+        timeout_open_door:
+          name: Släckfördröjning (Öppen dörr)
+          default: 3
+          selector:
+            number:
+              min: 1
+              max: 60
+              unit_of_measurement: min
+        timeout_empty:
+          name: Släckfördröjning (Stängd dörr, ingen där inne)
+          description: >-
+            Gäller t.ex. när någon gått ut och stängt dörren efter sig. Ett längre
+            värde skyddar den som går in, stänger och sitter helt still.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 60
+              unit_of_measurement: min
+        door_grace:
+          name: Rörelsesensorns återställningstid
+          description: >-
+            Hur länge rörelsesensorn ligger kvar på 'on' efter senaste rörelse,
+            plus marginal. Måste vara LÄNGRE än sensorns egen återställningstid,
+            annars tolkas den som går ut och stänger dörren som att den är kvar
+            (t.ex. Aqara ca 60 s, IKEA upp till 180 s).
+          default: 90
+          selector:
+            number:
+              min: 10
+              max: 300
+              unit_of_measurement: s
+        timeout_fallback:
+          name: Reservfördröjning (Död sensor)
+          default: 10
+          selector:
+            number:
+              min: 1
+              max: 60
+              unit_of_measurement: min
+        timeout_max:
+          name: Absolut maxtid utan rörelse
+          description: Släcker alltid efter så här lång tid utan rörelse, även om någon tros vara där inne.
+          default: 90
+          selector:
+            number:
+              min: 15
+              max: 480
+              unit_of_measurement: min
+        timeout_motion_stuck:
+          name: Max tid med rörelse på (0 = av)
+          description: >-
+            Om rörelsesensorn står på 'on' så här länge i sträck räknas den som
+            trasig och lampan släcks. Bra för PIR-sensorer. Lämna på 0 för
+            mmWave-/närvarosensorer, som legitimt kan vara 'on' länge.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 600
+              unit_of_measurement: min
+
+mode: queued
+max: 10
+max_exceeded: silent
+
+trigger_variables:
+  tv_humidity: !input humidity_sensor
+  tv_reference: !input reference_humidity_sensor
+  tv_offset: !input humidity_offset
+  tv_limit: !input humidity_threshold
+
+variables:
+  light_entities: !input target_light
+  motion: !input motion_sensor
+  door: !input door_sensor
+  occupancy: !input occupancy_helper
+  keep_manual: !input keep_manual_brightness
+  night_start: !input time_night_start
+  night_end: !input time_night_end
+  day_b: !input day_brightness
+  night_b: !input night_brightness
+  t_open: !input timeout_open_door
+  t_empty: !input timeout_empty
+  t_fallback: !input timeout_fallback
+  t_max: !input timeout_max
+  t_stuck: !input timeout_motion_stuck
+  dead_states: ["unavailable", "unknown"]
+  # Rörelse inom så här många sekunder efter att dörren stängts ignoreras,
+  # eftersom sensorn kan reagera på själva dörrbladet.
+  door_ignore_s: 5
+
+  lights_list: "{{ [light_entities] if light_entities is string else light_entities | list }}"
+  any_light_on: "{{ lights_list | select('is_state', 'on') | list | count > 0 }}"
+
+  motion_dead: "{{ states(motion) in dead_states }}"
+  door_dead: "{{ states(door) in dead_states }}"
+  door_open: "{{ is_state(door, 'on') }}"
+  door_closed: "{{ is_state(door, 'off') }}"
+  occupied: "{{ is_state(occupancy, 'on') }}"
+
+  # Sekunder sedan dörren senast bytte tillstånd.
+  door_age_s: >-
+    {%- set d = expand(door) | list -%}
+    {{- (now() - d[0].last_changed).total_seconds() if d else 0 -}}
+
+  # Minuter sedan rörelsesensorn senast bytte tillstånd, uppdelat på
+  # om den nu är 'on' (för fastnad sensor) eller inte (för maxtid).
+  motion_on_min: >-
+    {%- set m = expand(motion) | list -%}
+    {{- (now() - m[0].last_changed).total_seconds() / 60
+        if m and m[0].state == 'on' else 0 -}}
+  motion_idle_min: >-
+    {%- set m = expand(motion) | list -%}
+    {{- (now() - m[0].last_changed).total_seconds() / 60
+        if m and m[0].state != 'on' else 0 -}}
+
+  # Minuter sedan senaste aktivitet: rörelse, dörr eller lampa bytte tillstånd.
+  idle_min: >-
+    {%- set times = expand([motion, door] + lights_list)
+                    | map(attribute='last_changed') | list -%}
+    {{- (now() - (times | max)).total_seconds() / 60 if times else 0 -}}
+
+  target_brightness: >-
+    {%- set n = now().strftime('%H:%M:%S') -%}
+    {%- if night_start > night_end -%}
+      {%- set night = n >= night_start or n < night_end -%}
+    {%- else -%}
+      {%- set night = n >= night_start and n < night_end -%}
+    {%- endif -%}
+    {{- night_b if night else day_b -}}
+
+  should_turn_off: >-
+    {%- set idle = idle_min | float(0) -%}
+    {%- set m_idle = motion_idle_min | float(0) -%}
+    {%- set m_on = motion_on_min | float(0) -%}
+    {%- if not any_light_on -%}{{ false }}
+    {%- elif t_stuck | float(0) > 0 and m_on >= t_stuck | float(0) -%}{{ true }}
+    {%- elif is_state(motion, 'on') -%}{{ false }}
+    {%- elif motion_dead -%}{{ idle >= t_fallback | float(0) }}
+    {%- elif m_idle >= t_max | float(0) -%}{{ true }}
+    {%- elif door_dead -%}{{ idle >= t_fallback | float(0) }}
+    {%- elif door_open -%}{{ idle >= t_open | float(0) }}
+    {%- elif occupied -%}{{ false }}
+    {%- else -%}{{ idle >= t_empty | float(0) }}
+    {%- endif -%}
+
+triggers:
+  # --- TÄND / NÄRVARO ---
+  - trigger: state
+    entity_id: !input motion_sensor
+    to: "on"
+    not_from: ["unavailable", "unknown"]
+    id: motion_on
+  - trigger: state
+    entity_id: !input door_sensor
+    to: "on"
+    not_from: ["unavailable", "unknown"]
+    id: door_opened
+  - trigger: state
+    entity_id: !input door_sensor
+    to: "off"
+    for:
+      seconds: !input door_grace
+    id: door_settled
+  - trigger: template
+    value_template: >-
+      {%- set h = states(tv_humidity) | float(none) if tv_humidity else none -%}
+      {%- set r = states(tv_reference) | float(none) if tv_reference else none -%}
+      {%- if h is none -%}{{ false }}
+      {%- elif r is not none -%}{{ h >= r + tv_offset | float(0) }}
+      {%- else -%}{{ h >= tv_limit | float(0) }}
+      {%- endif -%}
+    id: shower_start
+
+  # --- BYTE MELLAN DAG- OCH NATTLÄGE ---
+  - trigger: time
+    at: !input time_night_start
+    id: mode_switch
+  - trigger: time
+    at: !input time_night_end
+    id: mode_switch
+
+  # --- UTVÄRDERA SLÄCKNING (exakt timing) ---
+  - trigger: state
+    entity_id: !input motion_sensor
+    to: "off"
+    for:
+      minutes: !input timeout_open_door
+    id: evaluate
+  - trigger: state
+    entity_id: !input motion_sensor
+    to: "off"
+    for:
+      minutes: !input timeout_empty
+    id: evaluate
+  - trigger: state
+    entity_id: !input motion_sensor
+    to: "off"
+    for:
+      minutes: !input timeout_fallback
+    id: evaluate
+  - trigger: state
+    entity_id: !input motion_sensor
+    to: "off"
+    for:
+      minutes: !input timeout_max
+    id: evaluate
+  - trigger: state
+    entity_id: !input door_sensor
+    to: ["on", "off"]
+    for:
+      minutes: !input timeout_open_door
+    id: evaluate
+  - trigger: state
+    entity_id: !input door_sensor
+    to: ["on", "off"]
+    for:
+      minutes: !input timeout_empty
+    id: evaluate
+
+  # --- SÄKERHETSNÄT: omstarter, döda/fastnade sensorer, manuell tändning m.m. ---
+  - trigger: time_pattern
+    minutes: "/5"
+    id: evaluate
+
+actions:
+  # 1. Uppdatera närvaro (wasp in a box)
+  - choose:
+      # Dörren öppnas: ingen är längre instängd.
+      - conditions:
+          - condition: trigger
+            id: door_opened
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: "{{ occupancy }}"
+
+      # Ny rörelse bakom stängd dörr: någon är där inne.
+      - conditions:
+          - condition: trigger
+            id: motion_on
+          - condition: template
+            value_template: "{{ door_closed and door_age_s | float(0) > door_ignore_s }}"
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: "{{ occupancy }}"
+
+      # Rörelse pågår fortfarande efter återställningstiden: någon stängde
+      # dörren inifrån och rör sig.
+      - conditions:
+          - condition: trigger
+            id: door_settled
+          - condition: template
+            value_template: "{{ is_state(motion, 'on') }}"
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: "{{ occupancy }}"
+
+      # Duschen startar bakom stängd dörr medan lampan är tänd.
+      - conditions:
+          - condition: trigger
+            id: shower_start
+          - condition: template
+            value_template: "{{ door_closed and any_light_on }}"
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: "{{ occupancy }}"
+
+  # 2. Tänd vid rörelse eller öppnad dörr
+  - if:
+      - condition: trigger
+        id:
+          - motion_on
+          - door_opened
+      - condition: template
+        value_template: "{{ not (keep_manual and any_light_on) }}"
+    then:
+      - action: light.turn_on
+        target:
+          entity_id: "{{ lights_list }}"
+        data:
+          brightness_pct: "{{ target_brightness }}"
+
+  # 3. Byte mellan dag- och nattläge för redan tända lampor
+  - if:
+      - condition: trigger
+        id: mode_switch
+      - condition: template
+        value_template: "{{ any_light_on }}"
+    then:
+      - action: light.turn_on
+        target:
+          entity_id: "{{ lights_list }}"
+        data:
+          brightness_pct: "{{ target_brightness }}"
+
+  # 4. Släck om läget kräver det
+  - if:
+      - condition: trigger
+        id: evaluate
+      - condition: template
+        value_template: "{{ should_turn_off }}"
+    then:
+      - action: light.turn_off
+        target:
+          entity_id: "{{ lights_list }}"
