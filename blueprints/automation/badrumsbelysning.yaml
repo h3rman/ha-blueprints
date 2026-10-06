@@ -17,7 +17,7 @@ blueprint:
 
     - Död dörr- eller rörelsesensor: släck efter reservfördröjning.
 
-    - Absolut maxtid utan rörelse: släcker alltid till slut.
+    - Absolut maxtid utan aktivitet: släcker alltid till slut.
 
 
     Dörrsensorn är valfri. Utan den styrs lampan bara av rörelse (och fukt) och
@@ -56,8 +56,14 @@ blueprint:
                   device_class: occupancy
                 - domain: binary_sensor
                   device_class: presence
+
+    door_section:
+      name: Dörr (valfritt)
+      icon: mdi:door
+      collapsed: true
+      input:
         door_sensor:
-          name: Dörrsensor (valfritt)
+          name: Dörrsensor
           description: >-
             'on' = öppen, 'off' = stängd. Utan dörrsensor styrs lampan av
             rörelse, med längre släckfördröjning vid hög fukt om fuktsensor finns.
@@ -73,17 +79,41 @@ blueprint:
         occupancy_helper:
           name: Närvarohjälpare
           description: >-
-            Valfri, används bara med dörrsensor. En Växel-hjälpare (input_boolean)
-            som bara används av den här automationen och minns om någon är kvar
-            bakom stängd dörr. Utan den räknas närvaron fram ur sensorernas
-            tidsstämplar, vilket glöms bort vid omstart eller om dörr- eller
-            rörelsesensorn tappar anslutningen. Med den räknas också en dusch som
-            startar bakom stängd dörr som att någon är där inne.
+            Valfri. En Växel-hjälpare (input_boolean) som bara används av den här
+            automationen och minns om någon är kvar bakom stängd dörr. Utan den
+            räknas närvaron fram ur sensorernas tidsstämplar, vilket glöms bort
+            vid omstart eller om dörr- eller rörelsesensorn tappar anslutningen.
+            Med den räknas också en dusch som startar bakom stängd dörr som att
+            någon är där inne.
           default: ""
           selector:
             entity:
               filter:
                 - domain: input_boolean
+        timeout_empty:
+          name: Släckfördröjning (Stängd dörr, ingen där inne)
+          description: >-
+            Gäller t.ex. när någon gått ut och stängt dörren efter sig. Ett längre
+            värde skyddar den som går in, stänger och sitter helt still.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 60
+              unit_of_measurement: min
+        door_grace:
+          name: Rörelsesensorns återställningstid
+          description: >-
+            Hur länge rörelsesensorn ligger kvar på 'on' efter senaste rörelse,
+            plus marginal. Måste vara LÄNGRE än sensorns egen återställningstid,
+            annars tolkas den som går ut och stänger dörren som att den är kvar
+            (t.ex. Aqara ca 60 s, IKEA upp till 180 s).
+          default: 90
+          selector:
+            number:
+              min: 10
+              max: 300
+              unit_of_measurement: s
 
     humidity_section:
       name: Fukt (valfritt)
@@ -196,32 +226,6 @@ blueprint:
               min: 1
               max: 60
               unit_of_measurement: min
-        timeout_empty:
-          name: Släckfördröjning (Stängd dörr, ingen där inne)
-          description: >-
-            Gäller t.ex. när någon gått ut och stängt dörren efter sig. Ett längre
-            värde skyddar den som går in, stänger och sitter helt still. Används
-            bara med dörrsensor.
-          default: 5
-          selector:
-            number:
-              min: 1
-              max: 60
-              unit_of_measurement: min
-        door_grace:
-          name: Rörelsesensorns återställningstid
-          description: >-
-            Hur länge rörelsesensorn ligger kvar på 'on' efter senaste rörelse,
-            plus marginal. Måste vara LÄNGRE än sensorns egen återställningstid,
-            annars tolkas den som går ut och stänger dörren som att den är kvar
-            (t.ex. Aqara ca 60 s, IKEA upp till 180 s). Används bara med
-            dörrsensor.
-          default: 90
-          selector:
-            number:
-              min: 10
-              max: 300
-              unit_of_measurement: s
         timeout_fallback:
           name: Reservfördröjning (Död sensor)
           default: 10
@@ -231,8 +235,10 @@ blueprint:
               max: 60
               unit_of_measurement: min
         timeout_max:
-          name: Absolut maxtid utan rörelse
-          description: Släcker alltid efter så här lång tid utan rörelse, även om någon tros vara där inne.
+          name: Absolut maxtid utan aktivitet
+          description: >-
+            Släcker alltid efter så här lång tid utan aktivitet (rörelse, dörr
+            eller lampa), även om någon tros vara där inne.
           default: 90
           selector:
             number:
@@ -332,16 +338,11 @@ variables:
       {%- endif -%}
     {%- endif -%}
 
-  # Minuter sedan rörelsesensorn senast bytte tillstånd, uppdelat på
-  # om den nu är 'on' (för fastnad sensor) eller inte (för maxtid).
+  # Minuter som rörelsesensorn har stått på 'on' i sträck (för fastnad sensor).
   motion_on_min: >-
     {%- set m = expand(motion) | list -%}
     {{- (now() - m[0].last_changed).total_seconds() / 60
         if m and m[0].state == 'on' else 0 -}}
-  motion_idle_min: >-
-    {%- set m = expand(motion) | list -%}
-    {{- (now() - m[0].last_changed).total_seconds() / 60
-        if m and m[0].state != 'on' else 0 -}}
 
   # Minuter sedan senaste aktivitet: rörelse, dörr eller lampa bytte tillstånd.
   idle_min: >-
@@ -360,13 +361,12 @@ variables:
 
   should_turn_off: >-
     {%- set idle = idle_min | float(0) -%}
-    {%- set m_idle = motion_idle_min | float(0) -%}
     {%- set m_on = motion_on_min | float(0) -%}
     {%- if not any_light_on -%}{{ false }}
     {%- elif t_stuck | float(0) > 0 and m_on >= t_stuck | float(0) -%}{{ true }}
     {%- elif is_state(motion, 'on') -%}{{ false }}
     {%- elif motion_dead -%}{{ idle >= t_fallback | float(0) }}
-    {%- elif m_idle >= t_max | float(0) -%}{{ true }}
+    {%- elif idle >= t_max | float(0) -%}{{ true }}
     {%- elif door_dead -%}{{ idle >= t_fallback | float(0) }}
     {%- elif occupied and not door_open -%}{{ false }}
     {%- else -%}
